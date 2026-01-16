@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { PLATINA_MEMBERS } from '../constants';
 import { Member } from '../types';
 import { parseExcelSheet, parseCSV } from '../services/excelService';
-import { findMemberMatches, SmartMatch } from '../services/geminiService';
+import { findMemberMatches, cleanDataWithAI, SmartMatch } from '../services/geminiService';
 import { Search, Users, X, Upload, Download, RefreshCw, Sparkles, Loader2, Link as LinkIcon, ArrowRightLeft } from 'lucide-react';
 
 const WhatsAppIcon = ({ className = "text-white" }: { className?: string }) => (
@@ -33,12 +33,7 @@ const Dashboard: React.FC = () => {
 
   // --- Handlers ---
 
-  const handleLoadChapterRoster = () => {
-    setMembers(PLATINA_MEMBERS);
-    setSelectedMemberName('');
-    setAiMatches([]);
-    setUploadError(null);
-  };
+  // --- Handlers ---
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -48,17 +43,30 @@ const Dashboard: React.FC = () => {
     setUploadError(null);
 
     try {
-      const parsedMembers = await parseExcelSheet(file);
-      if (parsedMembers.length === 0) {
-        setUploadError("No valid member data found in the spreadsheet.");
+      // 1. Get raw text from Excel (needs a helper or just use existing parseCSV if simple, but we want raw text)
+      // For now, let's use the existing excelService to just dump text if possible, 
+      // OR simplier: We can only support CSV for AI cleaning easily, OR we read the excel to a crude string.
+      // Let's assume we can use the existing parseExcelSheet to get a 'base' then clean it, 
+      // OR better, we update this flow to use the AI cleaner on the JSON output of the excel parser.
+
+      const initialParse = await parseExcelSheet(file);
+      // Convert to string for the AI to "clean" and re-structure properly if it was messy
+      const rawTextForAI = JSON.stringify(initialParse);
+
+      const cleanedMembers = await cleanDataWithAI(rawTextForAI);
+
+      if (cleanedMembers.length === 0) {
+        setUploadError("AI could not verify member data. Ensure the sheet matches official members.");
       } else {
-        setMembers(parsedMembers);
+        // ENRICHMENT: Map against known categories
+        const enrichedMembers = enrichMembersWithCategories(cleanedMembers);
+        setMembers(enrichedMembers);
         setSelectedMemberName('');
         setAiMatches([]);
       }
     } catch (err) {
       console.error(err);
-      setUploadError("Failed to parse the file. Please ensure it matches the BNI Ask/Give format.");
+      setUploadError("Failed to process file with AI.");
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -85,15 +93,19 @@ const Dashboard: React.FC = () => {
     try {
       const response = await fetch(csvUrl);
       if (!response.ok) {
-        throw new Error("Failed to fetch sheet. Make sure it is 'Published to Web' (File > Share > Publish to web).");
+        throw new Error("Failed to fetch sheet. Make sure it is 'Published to Web'.");
       }
       const csvText = await response.text();
-      const parsedMembers = await parseCSV(csvText);
 
-      if (parsedMembers.length === 0) {
-        setUploadError("No valid member data found in the sheet.");
+      // AI CLEANING
+      const cleanedMembers = await cleanDataWithAI(csvText);
+
+      if (cleanedMembers.length === 0) {
+        setUploadError("AI could not identify valid members. Ensure the sheet matches official roster.");
       } else {
-        setMembers(parsedMembers);
+        // ENRICHMENT
+        const enrichedMembers = enrichMembersWithCategories(cleanedMembers);
+        setMembers(enrichedMembers);
         setSelectedMemberName('');
         setAiMatches([]);
         setShowUrlInput(false);
@@ -101,16 +113,51 @@ const Dashboard: React.FC = () => {
       }
     } catch (err) {
       console.error(err);
-      setUploadError("Could not sync. Ensure the sheet is Published to the Web (File > Share > Publish to web).");
+      setUploadError("Could not sync with AI. Check sheet permissions.");
     } finally {
       setIsUploading(false);
     }
   };
 
+  // Helper to enrich AI-cleaned members with hardcoded Category data (Simulating URL fetch)
+  const enrichMembersWithCategories = (aiMembers: Member[]): Member[] => {
+    // We import the lookup map from constants (need to export MEMBER_ROSTER_DETAILS or similar logic)
+    // Since we don't have direct access to internal map of constants.ts easily without refactoring it,
+    // we can use the PLATINA_MEMBERS as a reference source since it's already loaded there.
+
+    // 1. FILTER: Only keep members who exist in our verified PLATINA_MEMBERS list.
+    // This removes "fake data" or bad rows from the AI output.
+    const validMembers = aiMembers.filter(m => {
+      return PLATINA_MEMBERS.some(
+        pm => pm.name.toLowerCase().trim() === m.name.toLowerCase().trim() ||
+          pm.name.toLowerCase().includes(m.name.toLowerCase())
+      );
+    });
+
+    // 2. ENRICH: Add their static details
+    return validMembers.map(m => {
+      // Find matching member in our "Database" (PLATINA_MEMBERS constant)
+      const knownMember = PLATINA_MEMBERS.find(
+        pm => pm.name.toLowerCase().trim() === m.name.toLowerCase().trim() ||
+          pm.name.toLowerCase().includes(m.name.toLowerCase())
+      );
+
+      // Should be found because we filtered above, but safe check
+      return {
+        ...m,
+        company: knownMember?.company || 'BNI Member',
+        specialty: knownMember?.specialty || 'General Member',
+        phoneNumber: knownMember?.phoneNumber || ''
+      };
+    });
+  };
+
   // --- Helper for WhatsApp (Specific Match) ---
   const getWhatsAppUrl = (matchName: string, give?: string, ask?: string) => {
     const matchedMember = members.find(m => m.name === matchName);
-    const phoneNumber = matchedMember?.phoneNumber || '918087312207';
+    const phoneNumber = matchedMember?.phoneNumber;
+
+    if (!phoneNumber) return '#'; // Or handle UI disable
 
     const firstName = matchName.split(' ')[0];
     const myName = selectedMemberName || 'a fellow member';
@@ -127,7 +174,10 @@ const Dashboard: React.FC = () => {
 
   // --- Helper for WhatsApp (General Contact) ---
   const getContactWhatsAppUrl = (targetMember: Member) => {
-    const phoneNumber = targetMember.phoneNumber || '918087312207';
+    const phoneNumber = targetMember.phoneNumber;
+
+    if (!phoneNumber) return '#';
+
     const firstName = targetMember.name.split(' ')[0];
     const myName = selectedMemberName || 'a fellow member';
 
@@ -197,13 +247,7 @@ const Dashboard: React.FC = () => {
             </span>
           )}
 
-          <button
-            onClick={handleLoadChapterRoster}
-            className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors shadow-sm"
-          >
-            <Download size={16} />
-            Reload Roster
-          </button>
+
 
           {/* Google Sheet Sync Button */}
           <div className="relative">
@@ -260,8 +304,7 @@ const Dashboard: React.FC = () => {
 
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">BNI Platina Chapter</h1>
-          <p className="text-xl text-gray-600">Ask & Give Connection Matcher</p>
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">Ask & Give Connection Matcher</h1>
           <div className="flex items-center justify-center gap-2 mt-2 text-sm text-gray-500">
             <Sparkles size={16} className="text-bni-gold" />
             <span>Powered by <a href="https://agentspanel.com" target="_blank" className="hover:underline text-bni-red">AgentsPanel</a> with Google Search Grounding.</span>
@@ -274,8 +317,8 @@ const Dashboard: React.FC = () => {
             <button
               onClick={() => setViewMode('findMatches')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'findMatches'
-                  ? 'bg-bni-red text-white'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-bni-red text-white'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               Find Matches
@@ -283,8 +326,8 @@ const Dashboard: React.FC = () => {
             <button
               onClick={() => setViewMode('browseAll')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'browseAll'
-                  ? 'bg-bni-red text-white'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-bni-red text-white'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               Browse All Members
@@ -378,7 +421,7 @@ const Dashboard: React.FC = () => {
                   {isMatching && (
                     <div className="flex items-center gap-2 text-bni-red bg-red-50 px-3 py-1 rounded-full animate-pulse">
                       <Sparkles size={16} />
-                      <span className="text-sm font-medium">Gemini is verifying matches...</span>
+                      <span className="text-sm font-medium">A.I is verifying matches...</span>
                     </div>
                   )}
                 </div>
@@ -438,15 +481,21 @@ const Dashboard: React.FC = () => {
                             </div>
 
                             {/* WhatsApp Button */}
-                            <a
-                              href={getWhatsAppUrl(match.member, match.give, match.matchingAsk)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#25D366] hover:bg-[#128C7E] text-white rounded-lg font-bold transition-colors shadow-sm w-full md:w-auto justify-center"
-                            >
-                              <WhatsAppIcon />
-                              <span>Connect on WhatsApp</span>
-                            </a>
+                            {members.find(m => m.name === match.member)?.phoneNumber ? (
+                              <a
+                                href={getWhatsAppUrl(match.member, match.give, match.matchingAsk)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#25D366] hover:bg-[#128C7E] text-white rounded-lg font-bold transition-colors shadow-sm w-full md:w-auto justify-center"
+                              >
+                                <WhatsAppIcon />
+                                <span>Connect on WhatsApp</span>
+                              </a>
+                            ) : (
+                              <button disabled className="inline-flex items-center gap-2 px-5 py-2.5 bg-gray-200 text-gray-500 rounded-lg font-bold shadow-sm w-full md:w-auto justify-center cursor-not-allowed">
+                                <span>No Contact Info</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -532,15 +581,21 @@ const Dashboard: React.FC = () => {
                   </div>
 
                   <div className="mt-auto pt-4 border-t border-gray-100">
-                    <a
-                      href={getContactWhatsAppUrl(member)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white border-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-lg font-bold transition-all shadow-sm text-sm group"
-                    >
-                      <WhatsAppIcon className="text-[#25D366] group-hover:text-white transition-colors" />
-                      <span>Contact on WhatsApp</span>
-                    </a>
+                    {member.phoneNumber ? (
+                      <a
+                        href={getContactWhatsAppUrl(member)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white border-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-lg font-bold transition-all shadow-sm text-sm group"
+                      >
+                        <WhatsAppIcon className="text-[#25D366] group-hover:text-white transition-colors" />
+                        <span>Contact on WhatsApp</span>
+                      </a>
+                    ) : (
+                      <button disabled className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-lg text-sm font-medium cursor-not-allowed">
+                        <span>No Contact Info</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

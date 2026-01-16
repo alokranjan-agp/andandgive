@@ -1,0 +1,7 @@
+@font-face {
+  font-family: 'Monda';
+  src: url('/fonts/Monda.woff') format('woff'),
+       url('/fonts/Monda.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}

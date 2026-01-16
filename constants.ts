@@ -101,6 +101,7 @@ const MEMBER_PHONE_MAP: Record<string, string> = {
   'Harsh Gupta': '919620377100',
   'Harsh Vardhan Sharma': '919990078888',
   'Ishan Gupta': '919654462090',
+  'Jatin Choudhary': '919929109373',
   'Jatin Kapoor': '918826063064',
   'Kunj Kalra': '919311071987',
   'Manish Malhotra': '917982473808',
@@ -174,7 +175,7 @@ const MEMBER_ROSTER_DETAILS: Record<string, { company: string, specialty: string
 export const PLATINA_MEMBERS: Member[] = RAW_PLATINA_DATA.map((m, index) => {
   // Look up phone number from map
   const mobile = MEMBER_PHONE_MAP[m.name] || '';
-  
+
   // Look up company and specialty from roster details
   const details = MEMBER_ROSTER_DETAILS[m.name] || { company: 'BNI Member', specialty: 'Member' };
 
