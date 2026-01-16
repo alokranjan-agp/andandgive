@@ -19,7 +19,8 @@ export const MOCK_MEMBERS: Member[] = [
     ],
     avatar: 'https://picsum.photos/200/200?random=1',
     email: 'sarah@pixelperfect.com',
-    phoneNumber: '919876543210'
+    phoneNumber: '919876543210',
+    chapterRole: 'Member'
   },
   {
     id: 'm2',
@@ -39,7 +40,8 @@ export const MOCK_MEMBERS: Member[] = [
     ],
     avatar: 'https://picsum.photos/200/200?random=2',
     email: 'david@growthdigital.com',
-    phoneNumber: '919876543211'
+    phoneNumber: '919876543211',
+    chapterRole: 'Member'
   }
 ];
 
@@ -189,6 +191,9 @@ export const PLATINA_MEMBERS: Member[] = RAW_PLATINA_DATA.map((m, index) => {
     gives: m.gives,
     avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(m.name)}&background=random&color=fff`,
     email: '',
-    phoneNumber: mobile
+    phoneNumber: mobile,
+    chapterRole: m.name === 'Arjit Benjamin' ? 'Captain' :
+      m.name === 'Jatin Choudhary' ? 'Co-Captain' :
+        m.name === 'Samika Sharma' ? 'Vault Keeper' : 'Hero'
   };
 });

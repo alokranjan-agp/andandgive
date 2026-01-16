@@ -21,6 +21,7 @@ export interface Member {
   avatar: string;
   email: string;
   phoneNumber: string;
+  chapterRole?: string;
 }
 
 export interface MatchResult {
